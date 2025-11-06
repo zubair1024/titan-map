@@ -119,6 +119,8 @@ curl "http://localhost:8000/nominatim/reverse?lat=43.73&lon=7.42&zoom=18&format=
 
 **Base Path:** `/osrm/`
 
+> **📍 GPS Snapping:** See [SNAPPING_GUIDE.md](./SNAPPING_GUIDE.md) for snapping GPS coordinates to roads and map-matching entire trips!
+
 **Route (Get directions):**
 ```bash
 # Basic route between two points (lon,lat format)
@@ -143,9 +145,59 @@ curl "http://localhost:8000/osrm/table/v1/driving/7.419,43.733;7.421,43.735;7.42
 curl "http://localhost:8000/osrm/nearest/v1/driving/7.419,43.733?number=3"
 ```
 
+**Match (GPS Trace Snapping - Map Matching):**
+
+⚠️ **IMPORTANT:** Always include `radiuses` parameter (default 5m is too small for most GPS data)
+
+```bash
+# Snap multiple GPS coordinates from a trip to roads
+# CRITICAL: Include radiuses parameter (50m recommended for phone GPS)
+curl "http://localhost:8000/osrm/match/v1/driving/7.419,43.733;7.4195,43.7335;7.420,43.734?radiuses=50;50;50&overview=full&geometries=geojson"
+
+# Response includes:
+# - Snapped coordinates for each input point
+# - Connected route geometry
+# - Distance and duration
+# - Confidence score
+```
+
+**Match Use Cases:**
+- Clean noisy GPS tracks from phones/vehicles
+- Snap entire trip to road network in one API call
+- Remove GPS drift and noise
+- Reconstruct routes from sparse waypoints
+
+**Radius Recommendations:**
+- Phone GPS (outdoor): `50` meters
+- Phone GPS (urban/indoor): `100` meters
+- High-precision GPS: `10` meters
+- Sparse waypoints: `200` meters
+
+**Example Response:**
+```json
+{
+  "code": "Ok",
+  "matchings": [{
+    "distance": 295.2,
+    "duration": 60.1,
+    "geometry": { "coordinates": [[7.419, 43.733], ...] }
+  }],
+  "tracepoints": [
+    {
+      "location": [7.418797, 43.732962],
+      "name": "Rue Grimaldi",
+      "distance": 16.89
+    }
+  ]
+}
+```
+
+**See:** [SNAPPING_GUIDE.md](./SNAPPING_GUIDE.md) for complete GPS snapping documentation
+
 **Features:**
 - Multi-Level Dijkstra (MLD) algorithm
 - Car routing profile (bicycle and foot available)
+- Map matching with up to 1000 points per request
 - Rate limiting: 20 requests/second
 - Manual update process (see below)
 
@@ -601,6 +653,81 @@ getRoute([7.419, 43.733], [7.421, 43.735])
         console.log('Geometry:', route.routes[0].geometry);
     });
 ```
+
+### GPS Snapping / Map Matching with JavaScript
+
+```javascript
+async function snapGPSTripToRoads(coordinates, gpsQuality = 'good') {
+    /**
+     * Snap multiple GPS coordinates from a trip to roads
+     * @param {Array} coordinates - [[lon, lat], [lon, lat], ...]
+     * @param {string} gpsQuality - 'high', 'good', 'poor', or 'very-poor'
+     * @returns {Object} Snapped coordinates and route info
+     */
+
+    // Choose radius based on GPS quality
+    const radiusMap = {
+        'high': 10,        // Vehicle tracker
+        'good': 50,        // Phone outdoors (DEFAULT)
+        'poor': 100,       // Urban/indoor
+        'very-poor': 200   // Sparse waypoints
+    };
+
+    const radius = radiusMap[gpsQuality] || 50;
+    const coords = coordinates.map(c => `${c[0]},${c[1]}`).join(';');
+    const radiuses = coordinates.map(() => radius).join(';');
+
+    const url = `http://localhost:8000/osrm/match/v1/driving/${coords}?` +
+                `radiuses=${radiuses}&overview=full&geometries=geojson`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.code !== 'Ok') {
+        throw new Error(`Match failed: ${data.message || data.code}`);
+    }
+
+    return {
+        // Snapped coordinates for EACH of your input points
+        snappedPoints: data.tracepoints.map(tp => ({
+            coordinates: tp.location,        // [lon, lat]
+            roadName: tp.name,
+            distanceFromOriginal: tp.distance // meters moved
+        })),
+
+        // Full route geometry (includes points on roads between yours)
+        routeGeometry: data.matchings[0].geometry.coordinates,
+
+        // Trip statistics
+        totalDistance: data.matchings[0].distance,  // meters
+        totalDuration: data.matchings[0].duration,  // seconds
+        confidence: data.matchings[0].confidence    // 0-1
+    };
+}
+
+// Example: Clean noisy GPS trip
+const gpsTrip = [
+    [7.419, 43.733],
+    [7.4195, 43.7335],
+    [7.420, 43.734],
+    [7.4205, 43.7345],
+    [7.421, 43.735]
+];
+
+snapGPSTripToRoads(gpsTrip, 'good')
+    .then(result => {
+        console.log('Snapped', result.snappedPoints.length, 'points');
+        console.log('Total distance:', result.totalDistance, 'meters');
+        console.log('Match confidence:', result.confidence);
+
+        // Show each snapped point
+        result.snappedPoints.forEach((point, i) => {
+            console.log(`Point ${i + 1}: ${point.roadName}, moved ${point.distanceFromOriginal.toFixed(1)}m`);
+        });
+    });
+```
+
+**See [SNAPPING_GUIDE.md](./SNAPPING_GUIDE.md) for complete documentation**
 
 ## Resource Requirements
 

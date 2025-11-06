@@ -35,7 +35,8 @@ make test
 | **All Services** | `http://localhost:8000` | - |
 | **Tiles** | `/tile/{z}/{x}/{y}.png` | `http://localhost:8000/tile/0/0/0.png` |
 | **Nominatim** | `/nominatim/search?q=...` | `http://localhost:8000/nominatim/search?q=monaco&format=json` |
-| **OSRM** | `/osrm/route/v1/driving/...` | `http://localhost:8000/osrm/route/v1/driving/7.419,43.733;7.421,43.735` |
+| **OSRM Routing** | `/osrm/route/v1/driving/...` | `http://localhost:8000/osrm/route/v1/driving/7.419,43.733;7.421,43.735` |
+| **OSRM Match (GPS Snap)** | `/osrm/match/v1/driving/...?radiuses=...` | `http://localhost:8000/osrm/match/v1/driving/7.419,43.733;7.420,43.734?radiuses=50;50` |
 
 ---
 
@@ -82,9 +83,15 @@ open tile.png
 curl 'http://localhost:8000/nominatim/search?q=monaco&format=json' | jq
 ```
 
-### Test OSRM
+### Test OSRM Routing
 ```bash
 curl 'http://localhost:8000/osrm/route/v1/driving/7.419,43.733;7.421,43.735?overview=false' | jq
+```
+
+### Test OSRM Match (GPS Snapping)
+```bash
+# Snap GPS trip to roads (MUST include radiuses!)
+curl 'http://localhost:8000/osrm/match/v1/driving/7.419,43.733;7.420,43.734;7.421,43.735?radiuses=50;50;50' | jq
 ```
 
 ---
@@ -164,6 +171,35 @@ See [README.md](README.md) for:
 - Performance tuning
 - Production deployment
 - Troubleshooting guide
+
+---
+
+## 📍 GPS Snapping / Map Matching
+
+**For multiple GPS coordinates from a trip:**
+
+Use **OSRM Match** to snap all points to roads in one API call:
+
+```bash
+# ⚠️ CRITICAL: Always include radiuses parameter!
+curl 'http://localhost:8000/osrm/match/v1/driving/7.419,43.733;7.4195,43.7335;7.420,43.734?radiuses=50;50;50&overview=full&geometries=geojson' | jq
+
+# Returns:
+# - Snapped coordinates for each input point
+# - Connected route geometry
+# - Distance and duration
+```
+
+**Radius Guidelines:**
+- Phone GPS: `50` meters (recommended)
+- Urban/Indoor: `100` meters
+- High-precision: `10` meters
+
+**Why radiuses is required:**
+- Default is only 5m (too small for most GPS)
+- Without it you'll get `"NoMatch"` error
+
+**See:** [SNAPPING_GUIDE.md](./SNAPPING_GUIDE.md) for complete documentation
 
 ---
 

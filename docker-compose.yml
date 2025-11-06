@@ -58,7 +58,7 @@ services:
   osrm:
     image: ghcr.io/project-osrm/osrm-backend:latest
     container_name: osm-osrm
-    command: osrm-routed --algorithm mld /data/${OSM_REGION}-latest.osrm
+    command: osrm-routed --algorithm mld --max-matching-size 1000 /data/${OSM_REGION}-latest.osrm
     volumes:
       - osrm-data:/data
     restart: unless-stopped
