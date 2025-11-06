@@ -1,0 +1,160 @@
+services:
+  # OSM Tile Server - Raster tiles with auto-updates
+  tile-server:
+    image: overv/openstreetmap-tile-server:latest
+    container_name: osm-tile-server
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        if [ ! -f /data/database/planet-import-complete ]; then
+          /run.sh import
+        fi
+        exec /run.sh run
+    environment:
+      - DOWNLOAD_PBF=${PBF_URL}
+      - DOWNLOAD_POLY=${POLY_URL}
+      - UPDATES=${ENABLE_TILE_UPDATES}
+      - THREADS=${TILE_SERVER_THREADS}
+    volumes:
+      - tile-data:/data/database
+      - tile-cache:/data/tiles
+    shm_size: ${TILE_SERVER_SHM_SIZE}
+    restart: unless-stopped
+    networks:
+      - osm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/tile/0/0/0.png"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10m
+
+  # Nominatim - Geocoding service with continuous updates
+  nominatim:
+    image: mediagis/nominatim:5.2
+    container_name: osm-nominatim
+    environment:
+      - PBF_URL=${PBF_URL}
+      - REPLICATION_URL=${REPLICATION_URL}
+      - NOMINATIM_PASSWORD=nominatim_password
+      # Enable continuous updates
+      - NOMINATIM_REPLICATION_UPDATE_INTERVAL=86400
+      - NOMINATIM_REPLICATION_RECHECK_INTERVAL=900
+    volumes:
+      - nominatim-data:/var/lib/postgresql/14/main
+      - nominatim-flatnode:/nominatim/flatnode
+    restart: unless-stopped
+    networks:
+      - osm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/search?q=test&format=json"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10m
+
+  # OSRM - Routing service
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    container_name: osm-osrm
+    command: osrm-routed --algorithm mld /data/${OSM_REGION}-latest.osrm
+    volumes:
+      - osrm-data:/data
+    restart: unless-stopped
+    networks:
+      - osm-network
+    depends_on:
+      - osrm-init
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5000/route/v1/driving/7.419,43.733;7.421,43.735"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 1m
+
+  # OSRM Initialization - Preprocesses OSM data
+  osrm-init:
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    container_name: osm-osrm-init
+    volumes:
+      - osrm-data:/data
+    environment:
+      - PBF_URL=${PBF_URL}
+      - OSM_REGION=${OSM_REGION}
+      - OSRM_PROFILE=${OSRM_PROFILE}
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        cd /data
+
+        # Check if already processed
+        if [ -f "${OSM_REGION}-latest.osrm" ]; then
+          echo "OSRM data already processed. Skipping initialization."
+          exit 0
+        fi
+
+        echo "Downloading OSM data..."
+        wget -O ${OSM_REGION}-latest.osm.pbf ${PBF_URL}
+
+        echo "Extracting OSM data for routing..."
+        osrm-extract -p /opt/${OSRM_PROFILE}.lua /data/${OSM_REGION}-latest.osm.pbf
+
+        echo "Partitioning routing graph..."
+        osrm-partition /data/${OSM_REGION}-latest.osrm
+
+        echo "Customizing routing weights..."
+        osrm-customize /data/${OSM_REGION}-latest.osrm
+
+        echo "OSRM preprocessing complete!"
+    networks:
+      - osm-network
+
+  # Nginx - Reverse proxy with path-based routing
+  nginx:
+    image: nginx:alpine
+    container_name: osm-nginx
+    ports:
+      - "${NGINX_PORT}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - nginx-cache:/var/cache/nginx
+    depends_on:
+      - tile-server
+      - nominatim
+      - osrm
+    restart: unless-stopped
+    networks:
+      - osm-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  osm-network:
+    driver: bridge
+
+volumes:
+  # Tile server volumes
+  tile-data:
+    driver: local
+  tile-cache:
+    driver: local
+
+  # Nominatim volumes
+  nominatim-data:
+    driver: local
+  nominatim-flatnode:
+    driver: local
+
+  # OSRM volumes
+  osrm-data:
+    driver: local
+
+  # Nginx cache
+  nginx-cache:
+    driver: local

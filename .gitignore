@@ -1,0 +1,28 @@
+# Docker volumes and data
+*.osm.pbf
+*.osrm*
+backups/
+
+# Logs
+*.log
+logs/
+
+# Environment overrides
+.env.local
+.env.production
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+
+.env

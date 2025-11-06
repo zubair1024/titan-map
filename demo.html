@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSM Stack Demo - Tiles + Geocoding + Routing</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header {
+            background: #2c3e50;
+            color: white;
+            padding: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        #header h1 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        #controls {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        input[type="text"] {
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            min-width: 200px;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #2980b9;
+        }
+
+        button:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+        }
+
+        #map {
+            flex: 1;
+        }
+
+        #info {
+            background: white;
+            padding: 1rem;
+            border-top: 1px solid #ddd;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .info-section {
+            margin-bottom: 0.5rem;
+        }
+
+        .info-section strong {
+            color: #2c3e50;
+        }
+
+        .error {
+            color: #e74c3c;
+            padding: 0.5rem;
+            background: #fadbd8;
+            border-radius: 4px;
+            margin-top: 0.5rem;
+        }
+
+        .success {
+            color: #27ae60;
+            padding: 0.5rem;
+            background: #d5f4e6;
+            border-radius: 4px;
+            margin-top: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>OSM Stack Demo</h1>
+        <div id="controls">
+            <div class="control-group">
+                <input type="text" id="searchInput" placeholder="Search location (e.g., monaco)">
+                <button onclick="searchLocation()">Search</button>
+            </div>
+            <div class="control-group">
+                <button onclick="calculateRoute()">Calculate Route</button>
+                <button onclick="clearMap()">Clear</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <div id="info">
+        <div class="info-section">
+            <strong>Instructions:</strong>
+            <ul>
+                <li>Search for locations using the search box (Nominatim)</li>
+                <li>Click on the map to add routing points</li>
+                <li>Click "Calculate Route" to get directions (OSRM)</li>
+                <li>Map tiles are served from your local tile server</li>
+            </ul>
+        </div>
+        <div id="output"></div>
+    </div>
+
+    <script>
+        // Configuration
+        const BASE_URL = 'http://localhost:8000';
+        const TILE_URL = `${BASE_URL}/tile/{z}/{x}/{y}.png`;
+        const NOMINATIM_URL = `${BASE_URL}/nominatim`;
+        const OSRM_URL = `${BASE_URL}/osrm`;
+
+        // Initialize map
+        const map = L.map('map').setView([43.73, 7.42], 13); // Monaco center
+
+        // Add custom tile layer
+        L.tileLayer(TILE_URL, {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+
+        // Storage for markers and routes
+        let markers = [];
+        let routeLayer = null;
+        let routePoints = [];
+
+        // Output helper
+        function showOutput(message, type = 'info') {
+            const output = document.getElementById('output');
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : '';
+            output.innerHTML = `<div class="${className}">${message}</div>`;
+        }
+
+        // Search location using Nominatim
+        async function searchLocation() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) {
+                showOutput('Please enter a search query', 'error');
+                return;
+            }
+
+            showOutput('Searching...');
+
+            try {
+                const response = await fetch(
+                    `${NOMINATIM_URL}/search?q=${encodeURIComponent(query)}&format=json&limit=5`
+                );
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const results = await response.json();
+
+                if (results.length === 0) {
+                    showOutput('No results found', 'error');
+                    return;
+                }
+
+                // Show first result on map
+                const result = results[0];
+                const lat = parseFloat(result.lat);
+                const lon = parseFloat(result.lon);
+
+                // Add marker
+                const marker = L.marker([lat, lon]).addTo(map);
+                marker.bindPopup(`<strong>${result.display_name}</strong>`).openPopup();
+                markers.push(marker);
+
+                // Pan to location
+                map.setView([lat, lon], 15);
+
+                // Show results
+                const resultsList = results.map((r, i) =>
+                    `${i + 1}. ${r.display_name}`
+                ).join('<br>');
+
+                showOutput(`<strong>Found ${results.length} result(s):</strong><br>${resultsList}`, 'success');
+
+            } catch (error) {
+                showOutput(`Error searching: ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+
+        // Handle map clicks for routing
+        map.on('click', function(e) {
+            if (routePoints.length < 2) {
+                const marker = L.marker(e.latlng).addTo(map);
+                marker.bindPopup(`Point ${routePoints.length + 1}`).openPopup();
+                markers.push(marker);
+                routePoints.push([e.latlng.lng, e.latlng.lat]); // OSRM uses lon,lat
+
+                if (routePoints.length === 2) {
+                    showOutput('Two points selected. Click "Calculate Route" to get directions.', 'success');
+                }
+            } else {
+                showOutput('Maximum 2 points. Click "Clear" to start over.', 'error');
+            }
+        });
+
+        // Calculate route using OSRM
+        async function calculateRoute() {
+            if (routePoints.length < 2) {
+                showOutput('Please click on the map to select 2 points for routing', 'error');
+                return;
+            }
+
+            showOutput('Calculating route...');
+
+            try {
+                const coords = routePoints.map(p => `${p[0]},${p[1]}`).join(';');
+                const response = await fetch(
+                    `${OSRM_URL}/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`
+                );
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+
+                if (data.code !== 'Ok') {
+                    throw new Error(data.message || 'Route calculation failed');
+                }
+
+                const route = data.routes[0];
+
+                // Draw route on map
+                if (routeLayer) {
+                    map.removeLayer(routeLayer);
+                }
+
+                routeLayer = L.geoJSON(route.geometry, {
+                    style: {
+                        color: '#3498db',
+                        weight: 5,
+                        opacity: 0.7
+                    }
+                }).addTo(map);
+
+                // Fit map to route
+                map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
+
+                // Display route info
+                const distance = (route.distance / 1000).toFixed(2);
+                const duration = Math.round(route.duration / 60);
+
+                showOutput(
+                    `<strong>Route Found!</strong><br>` +
+                    `Distance: ${distance} km<br>` +
+                    `Duration: ${duration} minutes<br>` +
+                    `Steps: ${route.legs[0].steps.length}`,
+                    'success'
+                );
+
+            } catch (error) {
+                showOutput(`Error calculating route: ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+
+        // Clear map
+        function clearMap() {
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+            routePoints = [];
+
+            if (routeLayer) {
+                map.removeLayer(routeLayer);
+                routeLayer = null;
+            }
+
+            document.getElementById('searchInput').value = '';
+            showOutput('Map cleared. Ready for new search or routing.');
+        }
+
+        // Allow Enter key to search
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchLocation();
+            }
+        });
+
+        // Initial message
+        showOutput('Map loaded successfully! Try searching for "monaco" or click on the map to create a route.');
+    </script>
+</body>
+</html>
