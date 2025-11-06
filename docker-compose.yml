@@ -34,6 +34,7 @@ services:
   nominatim:
     image: mediagis/nominatim:5.2
     container_name: osm-nominatim
+    shm_size: 256m
     environment:
       - PBF_URL=${PBF_URL}
       - REPLICATION_URL=${REPLICATION_URL}
@@ -41,9 +42,12 @@ services:
       # Enable continuous updates
       - NOMINATIM_REPLICATION_UPDATE_INTERVAL=86400
       - NOMINATIM_REPLICATION_RECHECK_INTERVAL=900
+      # Reduce memory usage for servers with limited RAM
+      - NOMINATIM_IMPORT_STYLE=extratags
     volumes:
-      - nominatim-data:/var/lib/postgresql/14/main
+      - nominatim-data:/var/lib/postgresql/16/main
       - nominatim-flatnode:/nominatim/flatnode
+      - ./nominatim-postgres-tuning.conf:/etc/postgresql/16/main/conf.d/postgres-tuning.conf:ro
     restart: unless-stopped
     networks:
       - osm-network
